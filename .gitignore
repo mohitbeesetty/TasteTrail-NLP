@@ -1,0 +1,28 @@
+# --- Python general ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+ENV/
+*.env
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Jupyter checkpoints ---
+.ipynb_checkpoints/
+
+# --- Cache and models ---
+cache/
+huggingface/
+transformers_cache/
+datasets/
