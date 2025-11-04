@@ -1,11 +1,9 @@
 import pandas as pd
 import numpy as np
 import re
-from datetime import datetime
 import os 
 
 # Machine Learning & NLP Libraries
-import torch
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
@@ -14,10 +12,6 @@ import spacy
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 class TasteTrailReviewAnalyzer:
-    """
-    Analyzes reviews using deep learning (BERT) for sentiment and heuristic NLP
-    techniques (VADER, spaCy) for authenticity scoring.
-    """
     def __init__(self):
         # BERT Model Initialization
         try:
@@ -50,7 +44,7 @@ class TasteTrailReviewAnalyzer:
 
     def preprocess_text(self, text):
         """
-        Cleans and normalizes the text.
+        Cleans and normalizes the text by removing punctuation, lowercasing, and removing stopwords.
         """
         text = re.sub(r"[^\w\s]", "", str(text).lower().strip()) 
         stop_words = set(stopwords.words("english"))
@@ -66,23 +60,19 @@ class TasteTrailReviewAnalyzer:
         if not self.nlp:
             return 0.0
         
-        # 1. Length Score
         length_score = min(len(review_text.split()) / 100, 1.0) 
         
-        # 2. Domain Specificity
         food_terms = ["taste", "flavor", "texture", "dish", "menu", "portion", "service", "waiter", "host", "price", "ambiance"]
         food_term_score = sum(1 for term in food_terms if term in review_text.lower()) / len(food_terms)
         
-        # 3. Personal Markers
         personal_markers = ["i", "we", "my", "our"]
         personal_count = sum(1 for token in doc if token.text.lower() in personal_markers)
         personal_score = min(personal_count / 10, 1.0) 
         
-        # 4. Emotional Intensity (VADER Compound Score)
         sentiment_scores = self.sia.polarity_scores(review_text)
         emotion_score = abs(sentiment_scores["compound"]) 
         
-        # Weighted average
+        # Weighted average of heuristics
         weights = [0.3, 0.3, 0.2, 0.2] 
         final_score = sum([
             length_score * weights[0],
@@ -104,7 +94,7 @@ class TasteTrailReviewAnalyzer:
         label = bert_result["label"]
         score = bert_result["score"]
 
-        # Convert BERT 1-5 star labels to simple sentiment categories
+        # Map 1-5 star labels to categories
         if "1" in label or "2" in label:
             sentiment = "negative"
         elif "3" in label:
@@ -150,9 +140,7 @@ class TasteTrailReviewAnalyzer:
             docs = [None] * len(df)
 
         print("Applying BERT sentiment and heuristic scoring...")
-        results = []
-        for text, doc in zip(df['caption'], docs):
-            results.append(self.process_review(text, doc))
+        results = [self.process_review(text, doc) for text, doc in zip(df['caption'], docs)]
         
         analysis_df = pd.DataFrame(results)
         final_df = pd.concat([df.reset_index(drop=True), analysis_df.reset_index(drop=True)], axis=1)
