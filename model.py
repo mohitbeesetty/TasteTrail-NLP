@@ -13,7 +13,6 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipe
 
 class TasteTrailReviewAnalyzer:
     def __init__(self):
-        # BERT Model Initialization
         try:
             self.tokenizer = AutoTokenizer.from_pretrained("nlptown/bert-base-multilingual-uncased-sentiment")
             self.model = AutoModelForSequenceClassification.from_pretrained("nlptown/bert-base-multilingual-uncased-sentiment")
@@ -29,7 +28,6 @@ class TasteTrailReviewAnalyzer:
             print(f"Error loading BERT model: {e}")
             self.sentiment_pipeline = None
 
-        # Traditional NLP Tools (spaCy, NLTK)
         try:
              self.nlp = spacy.load("en_core_web_sm") 
         except:
@@ -41,6 +39,20 @@ class TasteTrailReviewAnalyzer:
         nltk.download("vader_lexicon", quiet=True)
         
         self.sia = SentimentIntensityAnalyzer()
+
+    def _map_sentiment_to_score(self, sentiment):
+        """
+        Maps categorical sentiment to a 0.0-1.0 numerical score with an extreme positive bias,
+        aiming to stabilize the overall rating around 3.5/5.0.
+        Negative (0.60), Neutral (0.90), Positive (1.0).
+        """
+        if sentiment == "positive":
+            return 1.0
+        elif sentiment == "neutral":
+            return 0.90
+        elif sentiment == "negative":
+            return 0.60
+        return 0.5
 
     def preprocess_text(self, text):
         """
@@ -55,7 +67,6 @@ class TasteTrailReviewAnalyzer:
     def calculate_authenticity_score(self, review_text, doc):
         """
         Calculates a heuristic 'authenticity' score (0.00 to 1.00) based on review features.
-        Accepts the pre-processed 'doc' object from SpaCy's nlp.pipe().
         """
         if not self.nlp:
             return 0.0
@@ -104,10 +115,10 @@ class TasteTrailReviewAnalyzer:
 
         return sentiment, round(score, 3)
 
-    def process_review(self, review_text, doc=None):
+    def process_review(self, review_text, original_rating, doc=None):
         """
-        Runs the full analysis pipeline on a single review text.
-        Accepts an optional pre-parsed SpaCy 'doc' object.
+        Runs the full analysis pipeline on a single review text and calculates
+        the individual normalized score (0.0 - 5.0).
         """
         processed_text = self.preprocess_text(review_text)
         
@@ -118,10 +129,29 @@ class TasteTrailReviewAnalyzer:
         
         authenticity_score = self.calculate_authenticity_score(review_text, doc)
         
+        # --- Normalization---
+        sentiment_mapped = self._map_sentiment_to_score(sentiment)
+        
+        # Weighted Sentiment (WS) = Mapped Sentiment * Confidence (0.0 - 1.0)
+        weighted_sentiment = sentiment_mapped * confidence
+        
+        # Normalize the 1-5 star rating to a 0.0-1.0 scale
+        normalized_original_rating = original_rating / 5.0
+        
+        r_indiv = (
+            (0.30 * weighted_sentiment) +  # Bias from BERT sentiment
+            (0.05 * authenticity_score) +  # Heuristic authenticity check
+            (0.65 * normalized_original_rating)
+        ) * 5.0
+        
+        # Cap the score at 5.0 and round
+        normalized_rating = round(min(r_indiv, 5.0), 2)
+
         return {
             "sentiment": sentiment,
             "sentiment_confidence": confidence,
             "authenticity_score": authenticity_score,
+            "normalized_rating": normalized_rating
         }
 
     def analyze_reviews_in_bulk(self, df):
@@ -129,8 +159,8 @@ class TasteTrailReviewAnalyzer:
         Optimized method to analyze all reviews using SpaCy's nlp.pipe() 
         for efficient batch processing.
         """
-        if 'caption' not in df.columns:
-            print("Error: 'caption' column not found. Cannot proceed with bulk analysis.")
+        if 'caption' not in df.columns or 'rating' not in df.columns:
+            print("Error: 'caption' or 'rating' column not found. Cannot proceed with bulk analysis.")
             return df
 
         if self.nlp:
@@ -139,13 +169,31 @@ class TasteTrailReviewAnalyzer:
         else:
             docs = [None] * len(df)
 
-        print("Applying BERT sentiment and heuristic scoring...")
-        results = [self.process_review(text, doc) for text, doc in zip(df['caption'], docs)]
+        print("Applying BERT sentiment, heuristic scoring, and incorporating original ratings...")
+        # Pass the original 'rating' from the DataFrame to the process_review method
+        results = [
+            self.process_review(text, rating, doc) 
+            for text, rating, doc in zip(df['caption'], df['rating'], docs)
+        ]
         
         analysis_df = pd.DataFrame(results)
         final_df = pd.concat([df.reset_index(drop=True), analysis_df.reset_index(drop=True)], axis=1)
 
         return final_df
+
+    def calculate_overall_normalized_rating(self, analyzed_df):
+        """
+        Calculates the final overall restaurant rating by averaging the individual
+        'normalized_rating' scores across all reviews.
+        """
+        if 'normalized_rating' not in analyzed_df.columns:
+            print("Error: 'normalized_rating' column not found. Run analyze_reviews_in_bulk first.")
+            return None
+        
+        # Use mean() to calculate the overall average rating (0.0 - 5.0)
+        overall_rating = analyzed_df['normalized_rating'].mean()
+        return round(overall_rating, 2)
+    
 
 if __name__ == "__main__":
     print("Initializing TasteTrail Review Analyzer...")
@@ -167,8 +215,16 @@ if __name__ == "__main__":
         print(f"\nAnalysis complete. Processed {len(final_df)} reviews.")
         print(f"Enriched data saved to: {output_path}")
 
+        # Calculate and print the single, overall normalized rating
+        overall_rating = analyzer.calculate_overall_normalized_rating(final_df)
+        print(f"\n--- OVERALL RESTAURANT RATING (Normalized with Star Rating Bias - 65/30/5) ---")
+        if overall_rating is not None:
+             print(f"Final Normalized Rating: {overall_rating}/5.0")
+        else:
+             print("Could not calculate final rating due to missing data.")
+
         print("\n--- Full Analysis Results (First 5 Rows) ---")
-        print(final_df[["caption", "rating", "sentiment", "sentiment_confidence", "authenticity_score"]].head())
+        print(final_df[["caption", "rating", "sentiment", "sentiment_confidence", "authenticity_score", "normalized_rating"]].head())
 
     except FileNotFoundError:
         print(f"Error: The input file '{csv_path}' was not found. Please ensure it is in the same directory.")
